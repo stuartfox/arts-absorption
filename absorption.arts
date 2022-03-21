@@ -1,0 +1,126 @@
+# Absorption set-up for ARTS developed during EUMETSAT study
+# on evaluation of clear-sky absorption models using ISMAR
+# data
+Arts2{
+
+INCLUDE "general/general.arts"
+INCLUDE "general/continua.arts"
+INCLUDE "general/agendas.arts"
+INCLUDE "general/planet_earth.arts"
+
+Copy(iy_main_agenda, iy_main_agenda__Emission)
+Copy(ppath_agenda, ppath_agenda__FollowSensorLosPath)
+Copy(ppath_step_agenda, ppath_step_agenda__GeometricPath)
+Copy(iy_space_agenda, iy_space_agenda__CosmicBackground)
+
+StringSet(iy_unit, "RJBT")
+IndexSet(atmosphere_dim, 1)
+
+# Still not clear what ppath_lmax is really required
+# for sufficient accuracy. For zenith simulations 
+# near the surface in very opaque channels  (e.g. 448+/-1.4 GHz) a setting
+# of 250m can still lead to differences of up to 0.5K
+# compared to a value of 25m
+NumericSet(ppath_lmax, 250.0)
+
+AgendaSet(abs_xsec_agenda){
+abs_xsec_per_speciesInit
+abs_xsec_per_speciesAddConts
+}
+
+# Sensor configuration
+# For simpleAMSU-type sensors need to ensure that the
+# frequency spacing is sufficient to resolve any 
+# relevant ozone lines. For zenith simulations in ISMAR channels
+# from aircraft altitudes a value of 0.025GHz gives
+# results within 0.1K of a reference simulation with
+# a spacing of 0.003GHz.
+IndexSet(stokes_dim, 1)
+VectorNLinSpace(f_grid, 1999, 0.5e9, 1000e9)
+sensorOff
+
+# Gas absorption configuration
+abs_speciesSet(species=["H2O, H2O-SelfContCKDMT350, H2O-ForeignContCKDMT350",
+                        "O2-TRE05",
+                        "N2-SelfContMPM93",
+                        "O3"])
+abs_lines_per_speciesSetEmpty
+ArrayOfAbsorptionLinesCreate(temp_lines)
+# H2O lines
+ReadARTSCAT(abs_lines=temp_lines,
+            filename="AER_fast_3.8.H2O.xml.gz",
+            normalization_option="VVH", # Set to VVW for closest match to AMSUTRAN
+            mirroring_option="None", # Manual mirroring added later. Other standard mirroring options available in ARTS don't match what is done e.g. in AMSUTRAN or earlier ARTS versions
+            lineshapetype_option="VP", # Set to LP for closest match to AMSUTRAN
+            cutoff_option="ByLine",
+            cutoff_value=750e9)
+Append(abs_lines, temp_lines)
+# O3 lines
+ReadARTSCAT(abs_lines=temp_lines,
+            filename="JPL_fast.O3.xml.gz",
+            normalization_option="VVH", # Set to VVW for closest match to AMSUTRAN
+            mirroring_option="None", # Need to add manual mirroring for closest match to AMSUTRAN
+            lineshapetype_option="VP", # Set to LP for closest match to AMSUTRAN
+            cutoff_option="ByLine",
+            cutoff_value=20e9) # Set to 750e9 for closest match to AMSUTRAN
+Append(abs_lines, temp_lines)
+Delete(temp_lines)
+abs_lines_per_speciesCreateFromLines
+abs_lines_per_speciesMakeManualMirroringSpecies(species="H2O, H2O-SelfContCKDMT350, H2O-ForeignContCKDMT350")
+
+lbl_checkedCalc
+abs_xsec_agenda_checkedCalc
+
+AgendaSet(propmat_clearsky_agenda){
+Ignore(rtp_mag)
+Ignore(rtp_los)
+Ignore(rtp_nlte)
+propmat_clearskyInit
+propmat_clearskyAddXsecAgenda
+propmat_clearskyAddLines
+propmat_clearskyAddPredefined
+}
+
+# Surface
+Copy( iy_surface_agenda, iy_surface_agenda__UseSurfaceRtprop )
+Copy(surface_rtprop_agenda, surface_rtprop_agenda__Blackbody_SurfTFromt_field)
+
+# Other configuration options
+jacobianOff
+cloudboxOff
+
+# Profile information
+MatrixCreate(profile)
+ReadXML(profile, "profile.xml")
+atm_fields_compactFromMatrix(gin1=profile,
+                             field_names=["T","z","abs_species-H2O","abs_species-O3"])
+# Add fixed gases
+# Note that both the N2 and O2 absorption models already include the
+# adjustment to only work with the "dry air" partial pressure,
+# so these should not be scaled to account for the H2O vmr,
+# hence setting condensibles to empty
+atm_fields_compactAddConstant(name="abs_species-N2",
+                              value=0.781,
+                              condensibles=[])                             
+atm_fields_compactAddConstant(name="abs_species-O2",
+                              value=0.2085, # This is not a typo! The O2-TRE05 absorption routine
+                                            # in ARTS erroneously includes a correction for the isotopic
+                                            # ratio
+                              condensibles=[])
+AtmFieldsAndParticleBulkPropFieldFromCompact
+Extract(z_surface, z_field, 0)
+MatrixSetConstant(sensor_pos, 1, 1, 400e3)
+MatrixSetConstant(sensor_los, 1, 1, 180.0)
+
+atmfields_checkedCalc
+atmgeom_checkedCalc
+cloudbox_checkedCalc
+propmat_clearsky_agenda_checkedCalc
+sensor_checkedCalc
+
+yCalc
+
+WriteXML(in=f_grid)
+WriteXML(in=y)
+
+}
